@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use trainrl in your research, please cite it as below."
+title: "trainrl: a lightweight RLlib PPO training, evaluation and deployment wrapper"
+type: software
+authors:
+  - family-names: Violino
+    given-names: Elia
+    affiliation: "University of Arizona"   
+    orcid: "https://orcid.org/0000-0002-8489-5942"  
+version: 0.1.0
+date-released: 2026-10-08
+license: MIT
+repository-code: "https://github.com/eliaviolino/trainrl"

@@ -517,6 +517,23 @@ Each one includes the environment, YAML configs, `train.py` / `evaluate.py` / `t
 
 ***
 
+## Citation
+
+If you use `trainrl` in your research, please cite it:
+
+```bibtex
+@software{violino_trainrl_2026,
+  author  = {Violino, Elia},
+  title   = {trainrl: a lightweight RLlib PPO training, evaluation and deployment wrapper},
+  year    = {2026},
+  version = {0.1.0},
+  url     = {https://github.com/eliaviolino/trainrl}
+}
+```
+
+
+***
+
 ## License
 
 Copyright © 2026 Elia Violino. Released under the MIT License — see [LICENSE](LICENSE) for full terms.
