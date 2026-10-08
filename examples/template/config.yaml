@@ -1,0 +1,62 @@
+training_iterations: 200
+
+run_name: my_experiment
+num_checkpoints_to_keep: 2
+checkpoint_at_end_of_training: true
+
+env_runners_config:
+  batch_mode: complete_episodes
+  num_env_runners: 25
+  num_envs_per_env_runner: 4
+  num_cpus_per_env_runner: 0.62
+  num_gpus_per_env_runner: 0.0
+
+resources_config:
+  num_cpus_for_main_process: 1
+  num_gpus: 1
+
+learner_config:
+  num_learners: 1
+  num_gpus_per_learner: 1
+
+training_config:
+  train_batch_size: 10000 # num_env_runners × num_envs_per_env_runner × max_steps × N_episodes
+  minibatch_size: 2000             # was sgd_minibatch_size
+  gamma: 0.999
+  lr: 1.0e-4
+  kl_coeff: 0.0
+  vf_loss_coeff: 0.5
+  vf_clip_param: 10.0
+  clip_param: 0.3
+  num_epochs: 30                   # was num_sgd_iter
+
+metrics_to_log:                   # keys of your env's info dict to plot in TensorBoard
+  - "my_metric"
+
+eval_config:
+  evaluation_interval: 1
+  evaluation_duration: 25          # was evaluation_num_episodes
+  evaluation_duration_unit: episodes
+  evaluation_num_env_runners: 25    # was evaluation_num_workers
+  evaluation_parallel_to_training: true
+  evaluation_config:
+      explore: false
+
+final_eval_config:
+  num_episodes: 100
+
+rl_module_config:
+  model_config:
+    # MLP encoder
+    fcnet_hiddens: [64, 64]
+    fcnet_activation: tanh
+    # # LSTM on top of the encoder
+    # use_lstm: false
+    # lstm_cell_size: 64
+    # max_seq_len: 20              # truncated backprop through time window
+    # lstm_use_prev_action: true   # feed previous action into LSTM input
+    # lstm_use_prev_reward: false  # feed previous reward into LSTM input
+
+env: envs.sample_env.SampleEnv    # importable path to your env class
+env_config:                       # passed to SampleEnv(config): your env parameters go here
+  max_steps: 100

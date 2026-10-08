@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trainrl"
+version = "0.1.0"
+description = "A lightweight RLlib PPO training and evaluation wrapper"
+requires-python = ">=3.10"
+dependencies = [
+    "ray[rllib]>=2.4.0",
+    "torch>=1.12.0",
+    "numpy>=1.23.0",
+    "gymnasium>=0.28.1",
+    "PyYAML>=6.0",
+    "tensorboard>=2.12.0",
+    "sympy",
+    "dm-tree",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["trainrl*"]

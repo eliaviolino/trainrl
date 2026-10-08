@@ -1,0 +1,74 @@
+training_iterations: 200
+
+run_name: visual_target
+num_checkpoints_to_keep: 1
+checkpoint_at_end_of_training: true
+
+env_runners_config:
+  batch_mode: complete_episodes
+  num_env_runners: 20
+  num_envs_per_env_runner: 5
+  num_cpus_per_env_runner: 0.775
+  num_gpus_per_env_runner: 0
+
+resources_config:
+  num_cpus_for_main_process: 1
+  num_gpus: 1
+
+learner_config:
+  num_learners: 1
+  num_gpus_per_learner: 1
+
+training_config:
+  train_batch_size: 10000
+  minibatch_size: 2000             # was sgd_minibatch_size
+  gamma: 0.999
+  lr: 1.0e-4
+  kl_coeff: 0.0
+  vf_loss_coeff: 0.5
+  vf_clip_param: 10.0
+  clip_param: 0.3
+  num_epochs: 30                   # was num_sgd_iter
+
+eval_config:
+  evaluation_interval: 1
+  evaluation_duration: 20
+  evaluation_duration_unit: episodes
+  evaluation_num_env_runners: 20
+  evaluation_parallel_to_training: true
+  evaluation_config:
+    explore: false
+
+final_eval_config:
+  num_episodes: 100
+
+rl_module_config:
+  model_config:
+    # CNN filters: each entry is [num_filters, kernel_size, stride]
+    conv_filters:
+      - [32, 8, 4]   # 32 filters, 8x8 kernel, stride 4 --> to check: (64-8)/4 + 1 = 15  =>  (input_size - kernel_size) / stride + 1 = output_size
+      - [64, 4, 2]   # 64 filters, 4x4 kernel, stride 2 --> to check: (15-4)/2 + 1 = 6
+      - [64, 3, 1]   # 64 filters, 3x3 kernel, stride 1 --> to check: (6-3)/1 + 1 = 4
+    conv_activation: relu
+    # Flat FC layers after CNN
+    fcnet_hiddens: [256] # 4x4x64 = 1024 input features to the FC layer, then 256 hidden units
+    fcnet_activation: relu
+
+# CNN+LSTM config (uncomment to use)
+# rl_module_config:
+#   model_config:
+#     conv_filters:
+#       - [32, 8, 4]
+#       - [64, 4, 2]
+#       - [64, 3, 1]
+#     conv_activation: relu
+#     use_lstm: true
+#     lstm_cell_size: 256
+#     max_seq_len: 20
+#     lstm_use_prev_action: true
+#     lstm_use_prev_reward: false
+
+env: envs.visual_target.VisualTargetEnv
+env_config:
+  max_steps: 100
+  image_size: 64
