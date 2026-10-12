@@ -19,14 +19,18 @@ class TransformerRLModule(TorchRLModule, ValueFunctionAPI):
         nhead           (int)   : Number of attention heads. Default: 4
         num_layers      (int)   : Number of TransformerEncoderLayer stacks. Default: 2
         dim_feedforward (int)   : FFN hidden size inside each layer. Default: 128
-        max_seq_len     (int)   : Maximum observation history length. Default: 16
         dropout         (float) : Dropout probability. Default: 0.1
+
+    The observation window length (history_len) is not a model_config key: it is
+    read from the env's observation space, Box(shape=(history_len, obs_dim)),
+    which Lander2DEnv builds when env_config.history_len is set.
     """
 
     @override(TorchRLModule)
     def setup(self):
         # Pull environment dimensions from the RLModuleConfig
-        obs_dim = self.config.observation_space.shape[0]
+        # The env provides a window of past observations: (history_len, obs_dim)
+        history_len, obs_dim = self.config.observation_space.shape
         action_space = self.config.action_space
 
         # Detect action space type — no manual flag required
@@ -46,22 +50,18 @@ class TransformerRLModule(TorchRLModule, ValueFunctionAPI):
             nhead=cfg.get("nhead", 4),
             num_layers=cfg.get("num_layers", 2),
             dim_feedforward=cfg.get("dim_feedforward", 128),
-            max_seq_len=cfg.get("max_seq_len", 16),
+            history_len=history_len,
             dropout=cfg.get("dropout", 0.1),
         )
 
     def _prepare_obs(self, batch: dict) -> torch.Tensor:
         """
-        RLlib delivers observations as (batch, obs_dim) flat tensors.
-        The Transformer expects (batch, seq_len, obs_dim).
-
-        For now we treat each observation as a sequence of length 1.
-        This is the simplest correct approach — the Transformer still
-        runs, but without history. In a future step you can extend this
-        to pass a true observation history via the 'state' mechanism.
+        The env already stacks the last history_len observations, so RLlib
+        delivers (batch, history_len, obs_dim): exactly the Transformer input.
+        The module is stateless, so RLlib does not add a time axis or use
+        max_seq_len.
         """
-        obs = batch[Columns.OBS]          # (batch, obs_dim)
-        return obs.unsqueeze(1)           # (batch, 1, obs_dim)
+        return batch[Columns.OBS]         # (batch, history_len, obs_dim)
 
     @override(TorchRLModule)
     def _forward_inference(self, batch: dict, **kwargs) -> dict:

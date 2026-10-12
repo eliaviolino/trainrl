@@ -9,19 +9,19 @@ class PositionalEncoding(nn.Module):
     Injected into the token sequence so the Transformer knows the order
     of timesteps. This is important in RL where time order matters.
     """
-    def __init__(self, d_model: int, max_seq_len: int = 64, dropout: float = 0.1):
+    def __init__(self, d_model: int, history_len: int = 16, dropout: float = 0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
         # Precompute the encoding matrix once
-        pe = torch.zeros(max_seq_len, d_model)
-        position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
+        pe = torch.zeros(history_len, d_model)
+        position = torch.arange(0, history_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
             torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # shape: (1, max_seq_len, d_model)
+        pe = pe.unsqueeze(0)  # shape: (1, history_len, d_model)
         # Register as buffer: it's not a learnable parameter, but it
         # must travel with the model (e.g., during .to(device))
         self.register_buffer("pe", pe)
@@ -37,7 +37,8 @@ class TransformerPolicyNetwork(nn.Module):
     Causal Transformer backbone for RL policies.
     
     Inputs:
-        obs: (batch, seq_len, obs_dim)  — sequence of observations
+        obs: (batch, seq_len, obs_dim)  — window of the last seq_len observations,
+             oldest first (seq_len <= history_len)
     
     Outputs:
         action_dist_inputs:      (batch, action_dim)  — from the LAST timestep token
@@ -56,7 +57,7 @@ class TransformerPolicyNetwork(nn.Module):
         nhead: int = 4,
         num_layers: int = 2,
         dim_feedforward: int = 128,
-        max_seq_len: int = 16,
+        history_len: int = 16,
         dropout: float = 0.1,
     ):
         super().__init__()
@@ -69,7 +70,7 @@ class TransformerPolicyNetwork(nn.Module):
         self.input_projection = nn.Linear(obs_dim, d_model)
 
         # 2. Add positional encoding
-        self.pos_encoding = PositionalEncoding(d_model, max_seq_len, dropout)
+        self.pos_encoding = PositionalEncoding(d_model, history_len, dropout)
 
         # 3. Transformer encoder (we use "encoder" layers with a causal mask,
         #    mimicking a decoder-only architecture like GPT)
@@ -88,7 +89,7 @@ class TransformerPolicyNetwork(nn.Module):
         self.value_head = nn.Linear(d_model, 1)             # V(s)
 
         self._d_model = d_model
-        self._max_seq_len = max_seq_len
+        self._history_len = history_len
 
     def _causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
         """

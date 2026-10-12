@@ -40,8 +40,9 @@ def load_weights(model, checkpoint_dir):
 def preprocess_obs(raw_obs, arch_type, obs_shape=None):
     """
     raw_obs   : numpy array from your environment's step() or reset()
-    arch_type : "mlp", "lstm", or "cnn"
+    arch_type : "mlp", "lstm", "cnn", "transformer", or "vit"
     obs_shape : required for CNN — tuple (C, H, W) as the network expects it
+                required for ViT — the patch_size (int)
 
     Returns a torch.Tensor ready for the network.
     """
@@ -77,11 +78,24 @@ def preprocess_obs(raw_obs, arch_type, obs_shape=None):
         # Result shape: [1, seq_len, obs_dim]
         obs_tensor = torch.tensor(raw_obs, dtype=torch.float32).unsqueeze(0)
     elif arch_type == "vit":
-        # raw_obs: (H, W, C) — obs_shape carries patch_size (single int, from model_config)
-        obs = raw_obs.astype(np.float32) / 255.0 if raw_obs.max() > 1.0 else raw_obs.astype(np.float32)
-        H, W, C = obs.shape
+        # raw_obs: one image (H, W, C) or a window of images (N, H, W, C), oldest first
+        # obs_shape carries patch_size (single int, from model_config)
+        # Result shape: [1, num_patches, patch_dim] or [1, N, num_patches, patch_dim]
+        obs = raw_obs.astype(np.float32)
+        if np.issubdtype(raw_obs.dtype, np.integer) or obs.max() > 1.0:
+            obs = obs / 255.0                 # uint8 pixels → [0, 1], as in the RLModule
+
+        frames = obs if obs.ndim == 4 else obs[None]  # (N, H, W, C)
+        N, H, W, C = frames.shape
         p = obs_shape  # patch_size
-        patches = obs.reshape(H // p, p, W // p, p, C).transpose(0, 2, 1, 3, 4).reshape(-1, p * p * C)
+        # Flatten each patch as (C, P, P), the same order as the network's _to_patches
+        patches = (
+            frames.reshape(N, H // p, p, W // p, p, C)
+            .transpose(0, 1, 3, 5, 2, 4)      # (N, H/p, W/p, C, p, p)
+            .reshape(N, (H // p) * (W // p), C * p * p)
+        )
+        if obs.ndim == 3:
+            patches = patches[0]              # single image: (num_patches, patch_dim)
         obs_tensor = torch.tensor(patches, dtype=torch.float32).unsqueeze(0)
 
     return obs_tensor

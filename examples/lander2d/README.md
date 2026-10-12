@@ -33,12 +33,12 @@ Run every command from inside `examples/lander2d/`.
 
 | | |
 |---|---|
-| Observation | `[x, y, vx, vy]` |
+| Observation | `[x, y, vx, vy]`, or the last `history_len` of them, shape `(history_len, 4)` |
 | Action | `[thrust_x, thrust_y]` in `[-1, 1]` |
-| Reward | `-0.01·(|x|+|y|+|vx|+|vy|)` per step, **+100** for landing, **−100** for leaving the area |
-| Episode ends | landed (`|x|, |y| < land_pos` and `|vx|, |vy| < land_vel`), out of bounds, or `max_steps` |
+| Reward | `-0.01·(\|x\|+\|y\|+\|vx\|+\|vy\|)` per step, **+100** for landing, **−100** for leaving the area |
+| Episode ends | landed (`\|x\|, \|y\| < land_pos` and `\|vx\|, \|vy\| < land_vel`), out of bounds, or `max_steps` |
 
-All physics constants come from `env_config` in the YAML. The `info` dict returns `x, y, vx, vy`, which `metrics_to_log` sends to TensorBoard and the evaluation writes to its CSV.
+All physics constants come from `env_config` in the YAML. Setting `history_len` (used by the Transformer config) makes the observation a window of the last `history_len` states, oldest first. At reset the window is filled with the first state. Leave it unset for the MLP and LSTM. The `info` dict returns `x, y, vx, vy`, which `metrics_to_log` sends to TensorBoard and the evaluation writes to its CSV.
 
 Test the env with random actions before training:
 
@@ -108,8 +108,10 @@ rl_module_config:
     nhead: 4
     num_layers: 2
     dim_feedforward: 128
-    max_seq_len: 20
     dropout: 0.0
+
+env_config:
+  history_len: 16          # the Transformer's context window
 ```
 
 `trainrl` imports the class and hands it to RLlib. No Python changes are needed in `trainrl`. The module has two parts:
@@ -120,7 +122,7 @@ rl_module_config:
   - `_forward_inference` / `_forward_exploration` / `_forward_train`: return `ACTION_DIST_INPUTS` (and `VF_PREDS` during training).
   - `compute_values()`: the value estimates PPO uses for advantages.
 
-Each observation is currently fed as a sequence of length 1 (`_prepare_obs`). The network supports longer histories (`max_seq_len`), and the module is the place to add them.
+The Transformer has no hidden state, so its memory is the window of past observations it sees. The env builds that window (`history_len` in `env_config`), and the module reads its length from the observation space, so `history_len` is set in one place only.
 
 ## 5. Deploy without RLlib
 
@@ -139,7 +141,7 @@ Each script follows the same five steps:
 1. **Build the model.** The constants at the top (`HIDDEN_SIZES`, `LSTM_HIDDEN`, `D_MODEL`, ...) must match the training config.
 2. **Load the weights** from `best_checkpoint` (`load_weights`). This fails loudly if the architecture doesn't match.
 3. **Preprocess** a raw observation (`preprocess_obs`). Replace the example `[x, y, vx, vy]` with your sensor reading.
-4. **Run the forward pass** (`run_inference`). For the LSTM, start from `model.get_initial_state()` and pass `hidden_state` back in at every step.
+4. **Run the forward pass** (`run_inference`). For the LSTM, start from `model.get_initial_state()` and pass `hidden_state` back in at every step. For the Transformer, keep a window of the last `HISTORY_LEN` observations and fill it with the first observation at episode start, as the env does.
 5. **Convert to a control command** (`logits_to_action`), scaled to the action bounds.
 
 If loading fails, run `python deployment/architecture_check.py <best_checkpoint>`. It lists every weight name and shape in the checkpoint, so you can compare them with the deployment model.

@@ -2,6 +2,7 @@
 # Usage (from the example folder):
 #   python deployment/deploy_transformer.py results/<run_name>/<trial_folder>/best_checkpoint
 import sys
+from collections import deque
 import numpy as np
 from trainrl.deployment import (
     DeploymentPolicyMLP,
@@ -26,7 +27,7 @@ NHEAD             = 4
 NUM_LAYERS        = 2
 DIM_FEEDFORWARD   = 128
 DROPOUT           = 0.0
-MAX_SEQ_LEN       = 20
+HISTORY_LEN       = 16              # env_config.history_len
 
 # Continuous action range (from your gym Box space)
 ACTION_LOW        = np.array([-1.0, -1.0])
@@ -40,7 +41,7 @@ model = DeploymentPolicyTransformer(
     nhead=NHEAD,              # model_config.nhead
     num_layers=NUM_LAYERS,         # model_config.num_layers
     dim_feedforward=DIM_FEEDFORWARD,  # model_config.dim_feedforward
-    max_seq_len=MAX_SEQ_LEN,       # model_config.max_seq_len
+    history_len=HISTORY_LEN,       # env_config.history_len
     dropout=DROPOUT,               # model_config.dropout
     action_space_type="continuous",
 )
@@ -55,8 +56,13 @@ vx = 0.0
 vy = 0.0
 raw_obs = np.array([x, y, vx, vy])  # example raw observation from your environment
 
+# Keep a window of the last HISTORY_LEN observations, oldest first.
+# At episode start, fill it with the first observation: must match Lander2DEnv.reset().
+history = deque([raw_obs] * HISTORY_LEN, maxlen=HISTORY_LEN)
+# At every later step: history.append(raw_obs)
+
 # --- Step 3: Preprocess ---
-obs_tensor = preprocess_obs(raw_obs, arch_type="transformer")  # raw_obs shape: (seq_len, obs_dim)
+obs_tensor = preprocess_obs(np.stack(history), arch_type="transformer")  # [1, HISTORY_LEN, obs_dim]
 
 # --- Step 4: Forward pass ---
 logits, _  = run_inference(model, obs_tensor, arch_type="transformer")

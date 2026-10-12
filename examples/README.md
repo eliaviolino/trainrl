@@ -5,7 +5,7 @@ Each folder is a complete, self-contained `trainrl` project: an environment, YAM
 | Example | Observations | Actions | Networks | Shows |
 |---|---|---|---|---|
 | [**lander2d**](lander2d/) | vector `[x, y, vx, vy]` | continuous | MLP, LSTM, **Transformer** (beta) | built-in and custom RLModules, recurrent deployment, trajectory plots |
-| [**visual_target**](visual_target/) | 64×64 RGB image | discrete (8) | CNN, **ViT** (beta) | image observations, custom Vision Transformer, image deployment |
+| [**visual_target**](visual_target/) | 64×64 RGB image | discrete (8) | CNN, **ViT**, **temporal ViT** (beta) | image observations, custom Vision Transformer, sequences of frames, image deployment |
 | [**template**](template/) | — | — | MLP / LSTM | an empty `SampleEnv` to fill in for your own problem |
 
 All the examples follow the same workflow:

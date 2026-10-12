@@ -45,18 +45,16 @@ final_eval_config:
 rl_module_config:
   module_class: modules.transformer_rl_module.TransformerRLModule
   model_config:
-    # Transformer encoder
-    obs_dim: 4
-    action_dim: 2
+    # Transformer encoder (obs/action sizes and history_len come from the env)
     d_model: 64
     nhead: 4
     num_layers: 2
     dim_feedforward: 128
-    max_seq_len: 20
     dropout: 0.0
 
 env: envs.lander_env.Lander2DEnv
 env_config:
+  history_len: 16    # Transformer context: obs is the last 16 states, shape (16, 4)
   max_steps: 100
   dt: 0.1
   gravity: 0.5

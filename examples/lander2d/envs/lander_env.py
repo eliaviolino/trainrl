@@ -1,5 +1,6 @@
 import gymnasium as gym
 import numpy as np
+from collections import deque
 
 class Lander2DEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"]}
@@ -19,10 +20,18 @@ class Lander2DEnv(gym.Env):
         self.land_vel = config.get("land_vel", 0.1)
         self.boundary = config.get("boundary", 10.0)
 
-        # Observation space: [x, y, vx, vy]
+        # Observation history: None -> obs is the current state, shape (4,)
+        #                      N    -> obs is the last N states, shape (N, 4), oldest first
+        self.history_len = config.get("history_len", None)
+
+        # Observation space: [x, y, vx, vy] (stacked N times if history_len is set)
         obs_dimension = 4
         obs_high = np.array([self.boundary, self.boundary, 5.0, 5.0], dtype=np.float32)
-        self.observation_space = gym.spaces.Box(low=-obs_high, high=obs_high, shape=(obs_dimension,), dtype=np.float32)
+        if self.history_len is None:
+            self.observation_space = gym.spaces.Box(low=-obs_high, high=obs_high, shape=(obs_dimension,), dtype=np.float32)
+        else:
+            history_high = np.tile(obs_high, (self.history_len, 1))
+            self.observation_space = gym.spaces.Box(low=-history_high, high=history_high, dtype=np.float32)
 
         # Action space: [thrust_x, thrust_y]
         action_dimension = 2
@@ -38,6 +47,12 @@ class Lander2DEnv(gym.Env):
         self.y = self.np_random.uniform(0, 5)
         self.vx = 0.0
         self.vy = 0.0
+
+        # Fill the history with the first state (velocity is 0 at reset).
+        # Deployment must pad the same way (see deployment/deploy_transformer.py).
+        if self.history_len is not None:
+            self._history = deque([self._get_state()] * self.history_len, maxlen=self.history_len)
+
         # Return: (obs, info)
         return self._get_obs(), self._get_info()
 
@@ -72,10 +87,18 @@ class Lander2DEnv(gym.Env):
         terminated = landed or out_bound
         truncated  = timeout
 
+        if self.history_len is not None:
+            self._history.append(self._get_state())
+
         return self._get_obs(), reward, terminated, truncated, self._get_info()
 
-    def _get_obs(self):
+    def _get_state(self):
         return np.array([self.x, self.y, self.vx, self.vy], dtype=np.float32)
+
+    def _get_obs(self):
+        if self.history_len is None:
+            return self._get_state()
+        return np.stack(self._history)  # (history_len, 4), oldest first
 
     def _get_info(self):
         return {"x": float(self.x), "y": float(self.y), "vx": float(self.vx), "vy": float(self.vy)}

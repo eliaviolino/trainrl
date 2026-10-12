@@ -32,7 +32,7 @@ pip install -e .
 
 ## Quickstart
 
-> **New to `trainrl`?** Start from the [examples](examples/): complete, runnable projects for a [2D lander](examples/lander2d/) (MLP, LSTM, custom Transformer) and a [visual target](examples/visual_target/) task (CNN, custom ViT), plus an empty [template](examples/template/) to fill in with your own environment. Please note that the Transformer and ViT modules are in beta.
+> **New to `trainrl`?** Start from the [examples](examples/): complete, runnable projects for a [2D lander](examples/lander2d/) (MLP, LSTM, custom Transformer) and a [visual target](examples/visual_target/) task (CNN, custom ViT for single frames and sequences), plus an empty [template](examples/template/) to fill in with your own environment. Please note that the Transformer and ViT modules are in beta.
 
 ### Training
 
@@ -370,7 +370,7 @@ Copy this snippet directly into your `config.yaml` before running `train_ppo`.
 | `DeploymentPolicyLSTM` | `"lstm"` | Flat vector observations with recurrent memory |
 | `DeploymentPolicyCNN` | `"cnn"` | Image observations |
 | `DeploymentPolicyTransformer` | `"transformer"` | Sequence of flat observations (beta) |
-| `DeploymentPolicyViT` | `"vit"` | Image observations with Vision Transformer (beta) |
+| `DeploymentPolicyViT` | `"vit"` | Image observations with Vision Transformer, single frame or window of frames (beta) |
 
 ### Deployment Steps
 
@@ -407,8 +407,8 @@ obs_tensor = preprocess_obs(raw_obs, arch_type="lstm")
 # MLP:         [1, obs_dim]
 # LSTM:        [1, 1, obs_dim]
 # CNN:         [1, C, H, W]  (normalized to [0, 1])
-# Transformer: [1, seq_len, obs_dim]
-# ViT:         [1, num_patches, patch_dim]
+# Transformer: [1, history_len, obs_dim]  (window of the last history_len observations)
+# ViT:         [1, num_patches, patch_dim]  or, for a window of frames, [1, N, num_patches, patch_dim]
 ```
 
 **4. Run inference:**

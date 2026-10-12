@@ -222,7 +222,8 @@ def evaluate_checkpoint(
                 else:
                     obs, reset_info = env.reset(seed=episode_seed)
 
-                obs = np.asarray(obs, dtype=np.float32)
+                # Keep the space's dtype (e.g. uint8 images) so `contains` accepts it
+                obs = np.asarray(obs, dtype=env.observation_space.dtype)
 
                 if not env.observation_space.contains(obs):
                     raise ValueError(
@@ -278,7 +279,7 @@ def evaluate_checkpoint(
 
                     next_obs, reward, terminated, truncated, info = env.step(action)
 
-                    next_obs = np.asarray(next_obs, dtype=np.float32)
+                    next_obs = np.asarray(next_obs, dtype=env.observation_space.dtype)
                     reward = float(reward)
                     info = info if isinstance(info, dict) else {}
                     last_info = info
