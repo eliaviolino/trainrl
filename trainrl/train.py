@@ -49,6 +49,8 @@ def train_ppo(cfg_path: str, restore_dir: str = None, results_dir: str = "result
         .rl_module(
             **build_rl_module_config(rl_module_cfg)
         )
+        # Custom key read by CustomMetricCallbacks through env_runner.config.
+        .update_from_dict({"metrics_to_log": config_dict.get("metrics_to_log")})
     )
 
     if restore_dir:
