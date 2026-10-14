@@ -11,7 +11,7 @@ import yaml
 from ray import tune
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune import RunConfig, TuneConfig
-from trainrl.utils import _load_env_class, _register_env_from_config
+from trainrl.utils import _load_env_class, _register_env_from_config, build_rl_module_config
 
 
 class SimpleProgressCallback(tune.callback.Callback):
@@ -60,7 +60,17 @@ def _format_candidate(candidate: dict) -> str:
     )
 
 
-def _build_candidate_grid(cpus: int, gpus: int, envs: int, min_w: int, max_w: int) -> list[dict]:
+def _learner_cpus(learner_config: dict, num_gpus_per_learner: float) -> float:
+    # CPUs Ray reserves for remote learners. With num_learners=0 the learner runs in the main process.
+    # RLlib's "auto" gives each learner 1 CPU when it has no GPU, 0 otherwise.
+    num_learners = learner_config.get("num_learners", 0)
+    cpus_per_learner = learner_config.get("num_cpus_per_learner", "auto")
+    if cpus_per_learner == "auto":
+        cpus_per_learner = 1 if num_gpus_per_learner == 0 else 0
+    return num_learners * cpus_per_learner
+
+
+def _build_candidate_grid(cpus: int, gpus: int, envs: int, min_w: int, max_w: int, learner_config: dict | None = None) -> list[dict]:
     # Build a small set of representative resource configurations.
     # Each candidate is a valid Ray RLlib env_runners/resources setup.
     # We test CPU-only and GPU-driver variants without changing the model.
@@ -87,21 +97,23 @@ def _build_candidate_grid(cpus: int, gpus: int, envs: int, min_w: int, max_w: in
             total_w = w + eval_workers
 
             if hw == "cpu_only":
-                cpus_per_runner = (cpus - 1.)/ total_w if (cpus - 1.)/total_w < 1 else int((cpus - 1.)/total_w) # leave 1 CPU for Ray internals, divide the rest
-                cpus_for_main_process = int(cpus - cpus_per_runner * total_w)
                 gpus_per_runner = 0.0
                 resources_num_gpus = 0
             elif hw == "gpu_driver_cpu_envs":
-                cpus_per_runner = (cpus - 1.)/ total_w if (cpus - 1.)/total_w < 1 else int((cpus - 1.)/total_w) # divide all CPUs among env runners and eval workers
-                cpus_for_main_process = int(cpus - cpus_per_runner * total_w)
                 gpus_per_runner = 0.0
                 resources_num_gpus = gpus  # assign all GPUs to the driver (learners) for simplicity
             else:
                 raise ValueError(f"Unknown hardware configuration: {hw}")
+
+            # Learners on CPU need their own cores, so keep them out of the env runner budget.
+            learner_cpus = _learner_cpus(learner_config or {}, resources_num_gpus)
+            free_cpus = cpus - learner_cpus - 1.  # leave 1 CPU for the main process / Ray internals, divide the rest
+            cpus_per_runner = free_cpus / total_w if free_cpus / total_w < 1 else int(free_cpus / total_w)
+            cpus_for_main_process = int(cpus - learner_cpus - cpus_per_runner * total_w)
             
             total_worker_cpus = w * cpus_per_runner
             total_eval_cpus = w * cpus_per_runner
-            total_cpus_requested = total_worker_cpus + total_eval_cpus + cpus_for_main_process
+            total_cpus_requested = total_worker_cpus + total_eval_cpus + cpus_for_main_process + learner_cpus
 
             if total_cpus_requested > cpus:
                 print(f"Skipping candidate with {w} env runners due to CPU overallocation: "
@@ -175,7 +187,8 @@ def _build_and_run_trial(base_config: dict, cfg_path: str, candidate: dict, tria
         .env_runners(**config_dict.get("env_runners_config", {}))
         .resources(**config_dict.get("resources_config", {}))
         .training(**config_dict.get("training_config", {}))
-        .rl_module(model_config=config_dict.get("rl_module_config", {}).get("model_config", {}))
+        .evaluation(**config_dict.get("eval_config", {}))
+        .rl_module(**build_rl_module_config(config_dict.get("rl_module_config", {})))
         .learners(**config_dict.get("learner_config", {}))
     )
 
@@ -304,12 +317,14 @@ def tune_workstation_efficiency(
     max_w: int,
     stop_iters: int = 5,
     results_root: str = "results_tuning/workstation_hardware_tuning",
+    debug: bool = False,
 ) -> None:
     # Top-level tuning loop.
     # - cpus: total available CPU cores for Ray.
     # - gpus: total available GPUS for Ray.
     # - envs: desired total number of environments across all env runners.
     # - min_w/max_w: bounds for the number of env runners to try.
+    # - debug: forward Ray worker logs to the driver so trial errors are visible.
     config_path = Path(cfg_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {cfg_path}")
@@ -319,10 +334,13 @@ def tune_workstation_efficiency(
     os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
     os.environ["TUNE_WARN_EXCESSIVE_EXPERIMENT_CHECKPOINT_SYNC_THRESHOLD_S"] = "0"  
 
-    ray.init(num_cpus=cpus, num_gpus=gpus if gpus > 0 else None, log_to_driver=False, include_dashboard=False)
+    ray.init(num_cpus=cpus, num_gpus=gpus if gpus > 0 else None, log_to_driver=debug, include_dashboard=False)
 
     try:
-        candidates = _build_candidate_grid(cpus=cpus, gpus=gpus, envs=envs, min_w=min_w, max_w=max_w)
+        candidates = _build_candidate_grid(
+            cpus=cpus, gpus=gpus, envs=envs, min_w=min_w, max_w=max_w,
+            learner_config=base_config.get("learner_config", {}),
+        )
         print(f"Found {len(candidates)} candidate configurations for tuning.")
 
         output_root = Path(results_root).absolute()

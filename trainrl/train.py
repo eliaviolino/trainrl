@@ -5,7 +5,7 @@ from ray import tune
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune import RunConfig, TuneConfig, ResumeConfig
 
-from trainrl.utils import _register_env_from_config, _copy_checkpoint, build_rl_module_config
+from trainrl.utils import _register_env_from_config, build_rl_module_config
 from trainrl.callbacks import ProgressCallback, BestEvalCheckpointCallback, ExtendStopCallback, FixOptimizerAfterCheckpoint, CustomMetricCallbacks
 from trainrl.evaluate import evaluate_checkpoint
 
@@ -117,14 +117,11 @@ def train_ppo(cfg_path: str, restore_dir: str = None, results_dir: str = "result
         mode="max",
     )
 
-    try:
-        best_ckpt_path = best.path + "/best_checkpoint"
-    except Exception:
-        best_ckpt_path = None
-
-    if best_ckpt_path:
-        preserved_best_dir = os.path.join(best.path, "eval_checkpoint")
-        _copy_checkpoint(best_ckpt_path, preserved_best_dir)
+    # Evaluate the best checkpoint saved by BestEvalCheckpointCallback; best.checkpoint is only the latest one.
+    eval_ckpt_path = os.path.join(best.path, "best_checkpoint")
+    if not os.path.isdir(eval_ckpt_path):
+        print(f"Warning: no best checkpoint found at {eval_ckpt_path}, evaluating the latest checkpoint instead.")
+        eval_ckpt_path = best.checkpoint.path
 
     # Define how many episodes to evaluate after training ends
     eval_episodes = config_dict.get('final_eval_config', {}).get('num_episodes', 100)
@@ -138,7 +135,7 @@ def train_ppo(cfg_path: str, restore_dir: str = None, results_dir: str = "result
 
     # Run the custom evaluation script
     evaluate_checkpoint(
-        checkpoint_path=best.checkpoint.path,
+        checkpoint_path=eval_ckpt_path,
         config_path=cfg_path,
         output_dir=eval_output_directory,
         num_episodes=eval_episodes
