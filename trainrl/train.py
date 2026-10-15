@@ -6,7 +6,7 @@ from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune import RunConfig, TuneConfig, ResumeConfig
 
 from trainrl.utils import _register_env_from_config, build_rl_module_config
-from trainrl.callbacks import ProgressCallback, BestEvalCheckpointCallback, ExtendStopCallback, FixOptimizerAfterCheckpoint, CustomMetricCallbacks
+from trainrl.callbacks import ProgressCallback, BestEvalCheckpointCallback, ExtendStopCallback, FixOptimizerAfterCheckpoint, CustomMetricCallbacks, LoadInitCheckpoint
 from trainrl.evaluate import evaluate_checkpoint
 
 
@@ -32,6 +32,13 @@ def train_ppo(cfg_path: str, restore_dir: str = None, results_dir: str = "result
     # Ensure the results directory exists
     results_root = os.path.abspath(results_dir)
 
+    # Optional warm start from another run's weights. Absolute path, since Tune changes the trial's working dir.
+    init_checkpoint = config_dict.get("init_checkpoint")
+    if init_checkpoint:
+        init_checkpoint = os.path.abspath(init_checkpoint)
+        if not os.path.isdir(init_checkpoint):
+            raise FileNotFoundError(f"init_checkpoint not found: {init_checkpoint}")
+
     # Create PPO config using the loaded YAML config
     rl_module_cfg = config_dict.get("rl_module_config", {})
 
@@ -39,7 +46,7 @@ def train_ppo(cfg_path: str, restore_dir: str = None, results_dir: str = "result
         PPOConfig()
         .environment(env=env_name, env_config=config_dict.get("env_config", {}))
         .framework("torch")
-        .callbacks([FixOptimizerAfterCheckpoint, CustomMetricCallbacks])
+        .callbacks([FixOptimizerAfterCheckpoint, CustomMetricCallbacks, LoadInitCheckpoint])
         .env_runners(**config_dict.get("env_runners_config", {}))
         .resources(**config_dict.get("resources_config", {}))
         .training(**config_dict.get("training_config", {}))
@@ -51,6 +58,8 @@ def train_ppo(cfg_path: str, restore_dir: str = None, results_dir: str = "result
         )
         # Custom key read by CustomMetricCallbacks through env_runner.config.
         .update_from_dict({"metrics_to_log": config_dict.get("metrics_to_log")})
+        # Custom key read by LoadInitCheckpoint through algorithm.config.
+        .update_from_dict({"init_checkpoint": init_checkpoint})
     )
 
     if restore_dir:

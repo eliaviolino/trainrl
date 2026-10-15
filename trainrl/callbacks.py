@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from ray.tune import Callback
 from ray.rllib.callbacks.callbacks import RLlibCallback
+from ray.rllib.core import COMPONENT_LEARNER_GROUP, COMPONENT_LEARNER, COMPONENT_RL_MODULE
 from trainrl.utils import _copy_checkpoint
 
 # Custom callback to print training progress and save config to trial dir
@@ -111,6 +112,31 @@ class FixOptimizerAfterCheckpoint(RLlibCallback):
                     if isinstance(group["betas"][0], torch.Tensor):
                         group["betas"] = tuple(b.item() for b in group["betas"])
         algorithm.learner_group.foreach_learner(fix_betas)
+
+class LoadInitCheckpoint(RLlibCallback):
+    """Starts a new run from the RLModule weights of another run's checkpoint (e.g. for curriculum learning).
+
+    Only the network weights are loaded: optimizer state, iteration counters and the env config
+    come from the new run. When Tune resumes this run later, its own checkpoint is loaded after
+    this hook, so resuming still continues from the latest weights.
+    """
+    def on_algorithm_init(self, *, algorithm, **kwargs):
+        ckpt = algorithm.config.get("init_checkpoint")
+        if not ckpt:
+            return
+        component = f"{COMPONENT_LEARNER_GROUP}/{COMPONENT_LEARNER}/{COMPONENT_RL_MODULE}"
+        algorithm.restore_from_path(os.path.join(ckpt, component), component=component)
+
+        # restore_from_path syncs the EnvRunners fire-and-forget, so the first samples could still
+        # come from random weights. Push the loaded weights and wait for every EnvRunner to get them.
+        module_state = algorithm.learner_group.get_state(
+            components=f"{COMPONENT_LEARNER}/{COMPONENT_RL_MODULE}", inference_only=True,
+        )[COMPONENT_LEARNER][COMPONENT_RL_MODULE]
+        algorithm.env_runner_group.foreach_env_runner(
+            lambda env_runner: env_runner.set_state({COMPONENT_RL_MODULE: module_state})
+        )
+        print(f"Initialized policy weights from {ckpt}")
+
 
 class CustomMetricCallbacks(RLlibCallback):
 

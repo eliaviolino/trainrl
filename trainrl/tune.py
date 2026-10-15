@@ -18,9 +18,22 @@ class SimpleProgressCallback(tune.callback.Callback):
     def __init__(self, interval_s: float = 5.0):
         self.interval_s = interval_s
         self._last_print = 0.0
+        self._start_times = {}
+
+    def on_trial_start(self, iteration, trials, trial, **info):
+        self._start_times[trial.trial_id] = time.time()
+        print(f"Trial {trial.trial_id} | launched, building PPO (env runners, learner, RLModule)...", flush=True)
 
     def on_trial_result(self, iteration, trials, trial, result, **info):
         now = time.time()
+        if result.get("training_iteration", 0) == 1:
+            # Always report the first iteration so a slow trial is not mistaken for a hang.
+            since_start = now - self._start_times.get(trial.trial_id, now)
+            print(
+                f"Trial {trial.trial_id} | first iteration completed {since_start:.1f}s after launch "
+                f"(time_this_iter_s={result.get('time_this_iter_s', float('nan')):.2f})",
+                flush=True,
+            )
         if now - self._last_print >= self.interval_s:
             elapsed = result.get("time_total_s", 0.0)
             it = result.get("training_iteration", 0)
@@ -34,7 +47,8 @@ class SimpleProgressCallback(tune.callback.Callback):
             reward = result.get("episode_return_mean", reward)
             print(
                 f"Trial {trial.trial_id} | iter={it:>2} | time_this_iter_s={speed:>5.2f} | "
-                f"time_total_s={elapsed:>5.1f} | reward_mean={reward:>7.2f}"
+                f"time_total_s={elapsed:>5.1f} | reward_mean={reward:>7.2f}",
+                flush=True,
             )
             self._last_print = now
 
@@ -55,22 +69,37 @@ def _format_candidate(candidate: dict) -> str:
         f"num_cpus_per_env_runner={candidate['num_cpus_per_env_runner']:.2f}, "
         f"num_gpus_per_env_runner={candidate['num_gpus_per_env_runner']:.3f}, "
         f"num_cpus_for_main_process={candidate['num_cpus_for_main_process']}, "
+        f"num_cpus_per_learner={candidate['num_cpus_per_learner']}, "
         # f"train_batch_size={candidate['train_batch_size']}, "
         # f"minibatch_size={candidate['minibatch_size']}"
     )
 
 
-def _learner_cpus(learner_config: dict, num_gpus_per_learner: float) -> float:
-    # CPUs Ray reserves for remote learners. With num_learners=0 the learner runs in the main process.
-    # RLlib's "auto" gives each learner 1 CPU when it has no GPU, 0 otherwise.
+HARDWARE_ARCHITECTURES = ("cpu_only", "gpu_driver_cpu_envs")
+
+
+def _learner_cpus(learner_config: dict, num_gpus_per_learner: float, cpus: int) -> tuple[float, float]:
+    # Returns (CPUs per learner, total CPUs to keep out of the env runner budget for learning).
+    # A GPU learner keeps RLlib's "auto" (0 CPUs). A CPU learner trains with one torch thread
+    # per CPU, so RLlib's default of 1 CPU is far too slow; give it a quarter of the cores (max 8)
+    # unless learner_config sets num_cpus_per_learner explicitly.
+    # With num_learners=0 the learner runs in the main process, which then gets these CPUs.
     num_learners = learner_config.get("num_learners", 0)
     cpus_per_learner = learner_config.get("num_cpus_per_learner", "auto")
     if cpus_per_learner == "auto":
-        cpus_per_learner = 1 if num_gpus_per_learner == 0 else 0
-    return num_learners * cpus_per_learner
+        cpus_per_learner = 0 if num_gpus_per_learner > 0 else max(1, min(8, cpus // 4))
+    return cpus_per_learner, max(num_learners, 1) * cpus_per_learner
 
 
-def _build_candidate_grid(cpus: int, gpus: int, envs: int, min_w: int, max_w: int, learner_config: dict | None = None) -> list[dict]:
+def _build_candidate_grid(
+    cpus: int,
+    gpus: int,
+    envs: int,
+    min_w: int,
+    max_w: int,
+    learner_config: dict | None = None,
+    hardware: list[str] | None = None,
+) -> list[dict]:
     # Build a small set of representative resource configurations.
     # Each candidate is a valid Ray RLlib env_runners/resources setup.
     # We test CPU-only and GPU-driver variants without changing the model.
@@ -82,11 +111,16 @@ def _build_candidate_grid(cpus: int, gpus: int, envs: int, min_w: int, max_w: in
 
     candidate_grid: list[dict] = []
 
-    # Check GPU
-    if gpus > 0:
-        hardware = ["cpu_only", "gpu_driver_cpu_envs"]
-    else:
-        hardware = ["cpu_only"]
+    # With a GPU, a CPU learner is rarely worth testing (much slower for non-trivial models), so
+    # "cpu_only" is opt-in via the hardware argument.
+    if hardware is None:
+        hardware = ["gpu_driver_cpu_envs"] if gpus > 0 else ["cpu_only"]
+    unknown = [hw for hw in hardware if hw not in HARDWARE_ARCHITECTURES]
+    if unknown:
+        raise ValueError(f"Unknown hardware architecture(s) {unknown}; choose from {list(HARDWARE_ARCHITECTURES)}")
+    if gpus == 0 and "gpu_driver_cpu_envs" in hardware:
+        raise ValueError("'gpu_driver_cpu_envs' needs gpus > 0")
+    learner_config = learner_config or {}
 
     for hw in hardware:
         for w in divisors(envs):
@@ -106,10 +140,17 @@ def _build_candidate_grid(cpus: int, gpus: int, envs: int, min_w: int, max_w: in
                 raise ValueError(f"Unknown hardware configuration: {hw}")
 
             # Learners on CPU need their own cores, so keep them out of the env runner budget.
-            learner_cpus = _learner_cpus(learner_config or {}, resources_num_gpus)
+            cpus_per_learner, learner_cpus = _learner_cpus(learner_config, resources_num_gpus, cpus)
             free_cpus = cpus - learner_cpus - 1.  # leave 1 CPU for the main process / Ray internals, divide the rest
+            if free_cpus <= 0:
+                print(f"Skipping {hw} candidate with {w} env runners: learner CPUs ({learner_cpus}) leave none for env runners.")
+                continue
             cpus_per_runner = free_cpus / total_w if free_cpus / total_w < 1 else int(free_cpus / total_w)
             cpus_for_main_process = int(cpus - learner_cpus - cpus_per_runner * total_w)
+            if learner_config.get("num_learners", 0) == 0:
+                # The learner lives in the main process, so its CPUs belong to the main process.
+                cpus_for_main_process += learner_cpus
+                learner_cpus = 0
             
             total_worker_cpus = w * cpus_per_runner
             total_eval_cpus = w * cpus_per_runner
@@ -128,6 +169,7 @@ def _build_candidate_grid(cpus: int, gpus: int, envs: int, min_w: int, max_w: in
                 "num_gpus_per_env_runner": gpus_per_runner,
                 "num_cpus_for_main_process": cpus_for_main_process,
                 "resources_num_gpus": resources_num_gpus,
+                "num_cpus_per_learner": cpus_per_learner,
                 "eval_workers": eval_workers,
                 "eval_episodes": eval_episodes,
             }
@@ -178,6 +220,7 @@ def _build_and_run_trial(base_config: dict, cfg_path: str, candidate: dict, tria
 
     learner_config = _deep_copy_dict(config_dict.get("learner_config", {}))
     learner_config["num_gpus_per_learner"] = resources["num_gpus"]
+    learner_config["num_cpus_per_learner"] = candidate["num_cpus_per_learner"]
     config_dict["learner_config"] = learner_config
 
     config = (
@@ -214,7 +257,7 @@ def _build_and_run_trial(base_config: dict, cfg_path: str, candidate: dict, tria
         ),
     )
 
-    print(f"\nStarting trial {trial_id}: {_format_candidate(candidate)}")
+    print(f"\nStarting trial {trial_id} ({candidate['hardware_architecture']}): {_format_candidate(candidate)}", flush=True)
     results = tuner.fit()
     df = results.get_dataframe()
     avg_time = float(df["time_this_iter_s"].mean()) if "time_this_iter_s" in df.columns else float("nan")
@@ -250,12 +293,13 @@ def _write_summary_txt(summary: list[dict], output_path: Path, cfg_path: str, cp
         f.write("cpus_per_w=num_cpus_per_env_runner\n")
         f.write("gpus_per_w=num_gpus_per_env_runner\n")
         f.write("cpus_per_d=num_cpus_for_main_process\n")
+        f.write("cpus_per_l=num_cpus_per_learner\n")
         f.write("\n")
         f.write(
             f"{'hardware':<18}{'workers':>10}{'envs_per_w':>15}{'eval_workers':>15}{'eval_episodes':>15}"
-            f"{'cpus_per_w':>15}{'gpus_per_w':>15}{'cpus_per_d':>15}{'gpus_per_d':>15}{'time[s]':>12}\n"
+            f"{'cpus_per_w':>15}{'gpus_per_w':>15}{'cpus_per_d':>15}{'gpus_per_d':>15}{'cpus_per_l':>15}{'time[s]':>12}\n"
         )
-        f.write("-" * 140 + "\n")
+        f.write("-" * 155 + "\n")
         for trial in summary:
             f.write(
                 f"{trial.get('hardware_architecture', 'unknown'):<18}"
@@ -267,6 +311,7 @@ def _write_summary_txt(summary: list[dict], output_path: Path, cfg_path: str, cp
                 f"{trial['num_gpus_per_env_runner']:>15.5f}"
                 f"{trial['num_cpus_for_main_process']:>15.5f}"
                 f"{trial.get('gpus_per_driver', trial.get('resources_num_gpus', 0)):>15.5f}"
+                f"{trial.get('num_cpus_per_learner', 0):>15.5f}"
                 f"{trial['avg_time_this_iter_s']:>12.5f}"
                 f"\n"
             )
@@ -283,6 +328,7 @@ def _write_summary_txt(summary: list[dict], output_path: Path, cfg_path: str, cp
             f"{best_trial['num_gpus_per_env_runner']:>15.5f}"
             f"{best_trial['num_cpus_for_main_process']:>15.5f}"
             f"{best_trial.get('gpus_per_driver', best_trial.get('resources_num_gpus', 0)):>15.5f}"
+            f"{best_trial.get('num_cpus_per_learner', 0):>15.5f}"
             f"{best_trial['avg_time_this_iter_s']:>12.5f}"
             f"\n"
         )
@@ -297,6 +343,9 @@ def _write_summary_txt(summary: list[dict], output_path: Path, cfg_path: str, cp
         f.write("resources_config:\n")
         f.write(f"  num_cpus_for_main_process: {best_trial['num_cpus_for_main_process']}\n")
         f.write(f"  num_gpus: {int(best_trial.get('resources_num_gpus', best_trial.get('gpus_per_driver', 0)))}\n")
+        f.write("learner_config:\n")
+        f.write(f"  num_gpus_per_learner: {int(best_trial.get('resources_num_gpus', 0))}\n")
+        f.write(f"  num_cpus_per_learner: {best_trial.get('num_cpus_per_learner', 0)}\n")
         # f.write("training_config:\n")
         # f.write(f"  train_batch_size: {best_trial['train_batch_size']}\n")
         # f.write(f"  minibatch_size: {best_trial['minibatch_size']}\n")
@@ -318,6 +367,7 @@ def tune_workstation_efficiency(
     stop_iters: int = 5,
     results_root: str = "results_tuning/workstation_hardware_tuning",
     debug: bool = False,
+    hardware: list[str] | None = None,
 ) -> None:
     # Top-level tuning loop.
     # - cpus: total available CPU cores for Ray.
@@ -325,6 +375,8 @@ def tune_workstation_efficiency(
     # - envs: desired total number of environments across all env runners.
     # - min_w/max_w: bounds for the number of env runners to try.
     # - debug: forward Ray worker logs to the driver so trial errors are visible.
+    # - hardware: architectures to test, from HARDWARE_ARCHITECTURES. Defaults to
+    #   ["gpu_driver_cpu_envs"] when gpus > 0, else ["cpu_only"]. Add "cpu_only" to also time a CPU learner.
     config_path = Path(cfg_path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {cfg_path}")
@@ -340,6 +392,7 @@ def tune_workstation_efficiency(
         candidates = _build_candidate_grid(
             cpus=cpus, gpus=gpus, envs=envs, min_w=min_w, max_w=max_w,
             learner_config=base_config.get("learner_config", {}),
+            hardware=hardware,
         )
         print(f"Found {len(candidates)} candidate configurations for tuning.")
 

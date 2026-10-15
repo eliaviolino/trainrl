@@ -59,6 +59,24 @@ train_ppo(
 
 After training completes, `train_ppo` automatically runs a final evaluation and saves per-step logs to `results/<run_name>/final_evaluation/`.
 
+### Curriculum learning
+
+To fine-tune a trained policy on a different environment (e.g. first fixed gravity, then varying gravity), start a **new** run whose config points to the previous checkpoint:
+
+```yaml
+init_checkpoint: "results/stage1/PPO_MyEnv_xxxxx/best_checkpoint"
+env_config:
+  gravity_range: [0.3, 1.5]   # whatever your env reads
+```
+
+```python
+train_ppo("configs/stage2.yaml")   # no restore_dir
+```
+
+Only the network weights are loaded; the optimizer, iteration counter and env config come from the new YAML. The observation and action spaces and the `rl_module_config` must match the first run.
+
+> **Note:** `restore_dir` is not meant for this. Tune resumes each trial with the config it was saved with, so changes to `env_config` (or any other key except `training_iterations` with `continue_finished`) are ignored on restore.
+
 ### Evaluation
 
 ```python
@@ -188,6 +206,7 @@ final_eval_config:
 | `rl_module_config` | `dict` | Neural network architecture (see below) |
 | `metrics_to_log` | `list[str]` | Info-dict keys to log as custom TensorBoard metrics |
 | `checkpoint_at_end_of_training` | `bool` | Save a checkpoint at the final iteration (default: `true`) |
+| `init_checkpoint` | `str` | Start a new run from the policy weights of this checkpoint (see [Curriculum learning](#curriculum-learning)) |
 
 ***
 
@@ -328,6 +347,8 @@ tensorboard --logdir results/
 | `max_w` | `int` | Maximum number of env runners to try |
 | `stop_iters` | `int` | Training iterations per trial (default: `5`) — keep low |
 | `results_root` | `str` | Output folder for summary files (default: `results_tuning/workstation_hardware_tuning`) |
+| `debug` | `bool` | Forward Ray worker logs to the console so trial errors are visible (default: `False`) |
+| `hardware` | `list[str]` | Architectures to test: `"gpu_driver_cpu_envs"` (learner on GPU) and/or `"cpu_only"` (learner on CPU). Default: `["gpu_driver_cpu_envs"]` when `gpus > 0`, else `["cpu_only"]` |
 
 ### Output
 
